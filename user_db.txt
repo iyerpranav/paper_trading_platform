@@ -1,3 +1,0 @@
-jack 1234
-mac mac 
-user pass 

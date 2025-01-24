@@ -32,8 +32,8 @@ def get_current_price(symbol):
     current_price_element = soup.find("div", class_="YMlKec fxKbKc")
     if current_price_element:
         return current_price_element.text.strip()
-    else:
-        return None
+    
+    return None
 
 # Read existing portfolio data from the CSV file
 portfolio_data = []
