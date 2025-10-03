@@ -28,6 +28,7 @@ int main() {
 
     // POST /login
     svr.Post("/login", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "[INFO] /login endpoint hit" << std::endl;
         res.set_header("Access-Control-Allow-Origin", "*");
         try {
             auto j = json::parse(req.body);
@@ -54,8 +55,39 @@ int main() {
         }
     });
 
+    //POST /signin
+    svr.Post("/signin", [&](const httplib::Request& req, httplib::Response& res){
+        std::cout << "[INFO] /signin endpoint hit" << std::endl;
+        res.set_header("Access-Control-Allow-Origin", "*");
+        try {
+            auto j = json::parse(req.body);
+            std::string username = j["username"];
+            std::string password = j["password"];
+            std::string email = j["email"];
+            int userId = -1;
+
+            if (dbManager.addUser(username, password, email, userId)) {
+                json response_json = {
+                    {"success", true},
+                    {"userId", userId},
+                    {"username", username}
+                };
+                res.set_content(response_json.dump(), "application/json");
+            } else {
+                res.status = 401; // Unauthorized
+                json response_json = {{"success", false}, {"message", "Invalid credentials"}};
+                res.set_content(response_json.dump(), "application/json");
+            }
+        } catch (const std::exception& e) {
+            res.status = 400; // Bad Request
+            json response_json = {{"success", false}, {"message", e.what()}};
+            res.set_content(response_json.dump(), "application/json");
+        }
+    });
+
     // GET /portfolio/<userId>
     svr.Get(R"(/portfolio/(\d+))", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "[INFO] /portfolio endpoint hit" << std::endl;
         res.set_header("Access-Control-Allow-Origin", "*");
         try {
             int userId = std::stoi(req.matches[1]);
@@ -85,6 +117,7 @@ int main() {
 
     // POST /transaction
     svr.Post("/transaction", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "[INFO] /transaction endpoint hit" << std::endl;
         res.set_header("Access-Control-Allow-Origin", "*");
         try {
             auto j = json::parse(req.body);
@@ -122,6 +155,7 @@ int main() {
     
     // GET /stocks
     svr.Get("/stocks", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "[INFO] /stocks endpoint hit" << std::endl;
         res.set_header("Access-Control-Allow-Origin", "*");
         try {
             json stocks_json = dbManager.getAllStocksAsJson();
@@ -135,15 +169,11 @@ int main() {
 
     // POST /update_stocks
     svr.Post("/update_stocks", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "[INFO] /update_stocks endpoint hit" << std::endl;
         res.set_header("Access-Control-Allow-Origin", "*");
         int returnCode = system("python stockdb.py");
         if (returnCode == 0) {
-            if (dbManager.updateStockDatabase("stock_info.csv")) {
-                res.set_content(R"({"success": true, "message": "Database updated."})", "application/json");
-            } else {
-                res.status = 500;
-                res.set_content(R"({"success": false, "message": "Failed to update database from CSV."})", "application/json");
-            }
+            res.set_content(R"({"success": true, "message": "Stock database updated."})", "application/json");
         } else {
             res.status = 500;
             res.set_content(R"({"success": false, "message": "Failed to execute Python script."})", "application/json");

@@ -22,12 +22,20 @@ if 'logged_in' not in st.session_state:
 # --- API Client Functions ---
 def api_login(username, password):
     try:
-        response = requests.post(f"{API_BASE_URL}/login", json={"username": username, "password": password})
-        if response.status_code == 200:
-            return response.json()
-    except requests.exceptions.ConnectionError:
-        return {"success": False, "message": "Connection Error: Is the C++ backend server running?"}
-    return None
+        payload = {"username": username, "password": password}
+        response = requests.post(f"{API_BASE_URL}/login", json=payload)
+        return response.json()
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+def api_signin(username, password, email):
+    try:
+        payload = {"username": username, "password": password, "email": email}
+        response = requests.post(f"{API_BASE_URL}/signin", json=payload)
+        return response.json()
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
 
 def api_get_portfolio(user_id):
     try:
@@ -38,7 +46,7 @@ def api_get_portfolio(user_id):
             stocks = data.get('stocks', [])
             return balance, pd.DataFrame(stocks)
     except requests.exceptions.ConnectionError:
-        st.error("Connection Error: Could not fetch portfolio.")
+        st.error("Connection Error: Could not fetch portfolio. Is the C++ server running?")
     return 0.0, pd.DataFrame()
 
 def api_execute_transaction(user_id, symbol, quantity, price, trans_type):
@@ -63,7 +71,7 @@ def api_get_all_stocks():
         if response.status_code == 200:
             return pd.DataFrame(response.json())
     except requests.exceptions.ConnectionError:
-        st.error("Connection Error: Could not fetch stock list.")
+        st.error("Connection Error: Could not fetch stock list. Is the C++ server running?")
     return pd.DataFrame()
 
 def api_update_stocks():
@@ -76,18 +84,52 @@ def api_update_stocks():
 # --- User Authentication UI ---
 def show_login():
     st.title("Stock Portfolio Manager")
-    st.subheader("Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type='password')
-    if st.button("Login"):
-        result = api_login(username, password)
-        if result and result.get("success"):
-            st.session_state.logged_in = True
-            st.session_state.username = result.get("username")
-            st.session_state.user_id = result.get("userId")
-            st.rerun()
-        else:
-            st.error(result.get("message", "Invalid username or password"))
+    
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+
+    # Login Form
+    with tab1:
+        st.subheader("Login")
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_username")
+            password = st.text_input("Password", type='password', key="login_password")
+            submitted = st.form_submit_button("Login")
+            
+            if submitted:
+                if not username or not password:
+                    st.error("Please enter both username and password")
+                else:
+                    result = api_login(username, password)
+                    if result.get("success"):
+                        st.session_state.logged_in = True
+                        st.session_state.username = result.get("username")
+                        st.session_state.user_id = result.get("userId")
+                        st.rerun() # Use modern rerun
+                    else:
+                        st.error(result.get("message", "Invalid username or password"))
+
+    # Sign Up Form
+    with tab2:
+        st.subheader("Sign Up")
+        with st.form("signup_form"):
+            username = st.text_input("Username", key="signup_username")
+            password = st.text_input("Password", type='password', key="signup_password")
+            email = st.text_input("Email", key="signup_email")
+            submitted = st.form_submit_button("Sign Up")
+            
+            if submitted:
+                if not username or not password or not email:
+                    st.error("Please fill all fields")
+                else:
+                    result = api_signin(username, password, email)
+                    if result.get("success"):
+                        st.session_state.logged_in = True
+                        st.session_state.username = result.get("username")
+                        st.session_state.user_id = result.get("userId")
+                        st.rerun() # Use modern rerun
+                    else:
+                        st.error(result.get("message", "Sign up failed. Username or email may already be in use."))
+
 
 # --- Main Application UI ---
 def main_app():
@@ -96,7 +138,6 @@ def main_app():
     pages = {
         "My Portfolio": page_portfolio,
         "Stock Information": page_stock_info,
-        "Update Stock Data": page_update_data
     }
     selection = st.sidebar.radio("Go to", list(pages.keys()))
     pages[selection]()
@@ -146,14 +187,7 @@ def page_portfolio():
 
 def page_stock_info():
     st.title("Available Stock Information")
-    stock_df = api_get_all_stocks()
-    if stock_df.empty:
-        st.warning("No stock data available.")
-    else:
-        st.dataframe(stock_df, use_container_width=True)
-
-def page_update_data():
-    st.title("Update Market Data")
+    
     if st.button("Fetch Latest Stock Data"):
         with st.spinner("Requesting backend to fetch data..."):
             result = api_update_stocks()
@@ -161,6 +195,12 @@ def page_update_data():
                 st.success("Backend successfully updated the stock database!")
             else:
                 st.error(f"Error: {result.get('message')}")
+    
+    stock_df = api_get_all_stocks()
+    if stock_df.empty:
+        st.warning("No stock data available. Try fetching the latest data.")
+    else:
+        st.dataframe(stock_df, use_container_width=True)
 
 # --- Main App Router ---
 if not st.session_state.logged_in:

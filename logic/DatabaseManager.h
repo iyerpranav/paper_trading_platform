@@ -17,12 +17,12 @@ public:
     ~DatabaseManager();
 
     bool initializeDatabase();
+    bool addUser(const std::string& username, const std::string& passwordHash, const std::string& email, int& user_id);
     bool validateUser(const std::string& username, const std::string& password, int& user_id);
     bool loadPortfolio(int user_id, Portfolio& portfolio);
     bool savePortfolio(int user_id, const Portfolio& portfolio);
     bool updateStockDatabase(const std::string& csv_path);
-    
-    // New function to get all stocks as a JSON object
+
     json getAllStocksAsJson();
 };
 

@@ -1,82 +1,156 @@
 import yfinance as yf
-import csv
+import sqlite3
 import sys
+from datetime import datetime
 
 # --- List of Stock Symbols to Fetch ---
-# You can customize this list with any valid stock tickers.
 STOCK_SYMBOLS = [
-    "AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", 
+    "AAPL", "GOOGL", "MSFT", "AMZN", "TSLA",
     "NVDA", "JPM", "V", "JNJ", "WMT"
 ]
 
-# --- Name of the output CSV file ---
-CSV_FILENAME = "stock_info.csv"
+DATABASE = "stock_portfolio.db"
+
+def connect_db():
+    """
+    Connect to the SQLite database and create Stock + MarketData tables if not exist.
+    """
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+
+    # Create Stock table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS Stock (
+        StockID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Symbol TEXT NOT NULL UNIQUE,
+        CompanyName TEXT NOT NULL,
+        MarketCap INTEGER,
+        AvgVolume INTEGER,
+        DividendYield REAL,
+        PERatio REAL,
+        FiftyTwoWeekLow REAL,
+        FiftyTwoWeekHigh REAL,
+        DayLow REAL,
+        DayHigh REAL,
+        PreviousClose REAL
+    )
+    """)
+
+    # Create MarketData table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS MarketData (
+        MarketDataID INTEGER PRIMARY KEY AUTOINCREMENT,
+        StockID INTEGER NOT NULL,
+        Price REAL NOT NULL,
+        Volume INTEGER,
+        Timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (StockID) REFERENCES Stock(StockID)
+    )
+    """)
+    conn.commit()
+    return conn
+
+
+def upsert_stock(conn, symbol, info):
+    """
+    Insert or update a stock's fundamentals in the Stock table.
+    """
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO Stock (
+            Symbol, CompanyName, MarketCap, AvgVolume,
+            DividendYield, PERatio, FiftyTwoWeekLow,
+            FiftyTwoWeekHigh, DayLow, DayHigh, PreviousClose
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(Symbol) DO UPDATE SET
+            CompanyName=excluded.CompanyName,
+            MarketCap=excluded.MarketCap,
+            AvgVolume=excluded.AvgVolume,
+            DividendYield=excluded.DividendYield,
+            PERatio=excluded.PERatio,
+            FiftyTwoWeekLow=excluded.FiftyTwoWeekLow,
+            FiftyTwoWeekHigh=excluded.FiftyTwoWeekHigh,
+            DayLow=excluded.DayLow,
+            DayHigh=excluded.DayHigh,
+            PreviousClose=excluded.PreviousClose
+    """, (
+        symbol,
+        info.get('shortName') or symbol,
+        info.get('marketCap'),
+        info.get('averageVolume'),
+        info.get('dividendYield'),
+        info.get('trailingPE'),
+        info.get('fiftyTwoWeekLow'),
+        info.get('fiftyTwoWeekHigh'),
+        info.get('dayLow'),
+        info.get('dayHigh'),
+        info.get('previousClose')
+    ))
+    conn.commit()
+
+    # Return StockID
+    c.execute("SELECT StockID FROM Stock WHERE Symbol=?", (symbol,))
+    return c.fetchone()[0]
+
+
+def insert_market_data(conn, stock_id, price, volume, timestamp=None):
+    """
+    Insert time-series price/volume into MarketData.
+    """
+    if timestamp is None:
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO MarketData (StockID, Price, Volume, Timestamp)
+        VALUES (?, ?, ?, ?)
+    """, (stock_id, price, volume, timestamp))
+    conn.commit()
+
 
 def fetch_stock_data():
     """
-    Fetches stock data for a list of symbols from Yahoo Finance 
-    and writes it to a CSV file.
+    Fetch stock data from yfinance.
     """
-    print("[Python] Starting to fetch stock data...")
-    
-    stock_data_list = []
-    
+    print("[Python] Fetching stock data...")
+    stock_data = {}
     for symbol in STOCK_SYMBOLS:
         try:
-            print(f"[Python] Fetching data for {symbol}...")
+            print(f"[Python] {symbol} ...")
             stock = yf.Ticker(symbol)
-            info = stock.info
-
-            # --- Data Extraction ---
-            # We use .get() to avoid errors if a key is missing, providing 'N/A' as a default.
-            prev_close = info.get('previousClose', 'N/A')
-            day_range = f"{info.get('dayLow', 'N/A')} - {info.get('dayHigh', 'N/A')}"
-            year_range = f"{info.get('fiftyTwoWeekLow', 'N/A')} - {info.get('fiftyTwoWeekHigh', 'N/A')}"
-            market_cap = info.get('marketCap', 'N/A')
-            avg_volume = info.get('averageVolume', 'N/A')
-            
-            # Dividend yield is a ratio, so we multiply by 100 to get a percentage
-            div_yield = info.get('dividendYield')
-            div_yield_percent = f"{div_yield * 100:.2f}%" if isinstance(div_yield, (int, float)) else 'N/A'
-
-            pe_ratio = info.get('trailingPE', 'N/A')
-
-            # --- Append to our list for CSV writing ---
-            stock_data_list.append([
-                symbol, prev_close, day_range, year_range, 
-                market_cap, avg_volume, div_yield_percent, pe_ratio
-            ])
-
+            stock_data[symbol] = stock.info
         except Exception as e:
-            print(f"[Python ERROR] Could not fetch data for {symbol}: {e}", file=sys.stderr)
-            # Add a row with 'N/A' for all fields if the ticker fails
-            stock_data_list.append([symbol] + ['N/A'] * 7)
+            print(f"[ERROR] Failed fetching {symbol}: {e}", file=sys.stderr)
+            stock_data[symbol] = {}
+    return stock_data
 
-    return stock_data_list
 
-def write_to_csv(data):
+def update_database(data):
     """
-    Writes the collected stock data to a CSV file.
+    Update Stock fundamentals and insert MarketData rows.
     """
-    header = [
-        "Symbol", "Prev Close", "Day Range", "Year Range", 
-        "Market Cap", "Avg Volume", "Div Yield", "P/E Ratio"
-    ]
-    
-    try:
-        with open(CSV_FILENAME, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(header)
-            writer.writerows(data)
-        print(f"[Python] Successfully wrote data to {CSV_FILENAME}")
-    except IOError as e:
-        print(f"[Python ERROR] Could not write to file {CSV_FILENAME}: {e}", file=sys.stderr)
-        sys.exit(1) # Exit with an error code
+    conn = connect_db()
+    for symbol, info in data.items():
+        if not info:
+            continue
+        try:
+            stock_id = upsert_stock(conn, symbol, info)
+
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            volume = info.get("volume") or info.get("averageVolume")
+
+            if price is not None and volume is not None:
+                insert_market_data(conn, stock_id, price, volume)
+        except Exception as e:
+            print(f"[DB ERROR] {symbol}: {e}", file=sys.stderr)
+
+    conn.close()
+
 
 if __name__ == "__main__":
-    data_to_write = fetch_stock_data()
-    if data_to_write:
-        write_to_csv(data_to_write)
+    stock_data = fetch_stock_data()
+    if stock_data:
+        update_database(stock_data)
+        print("[Python] Database updated with latest stock + market data.")
     else:
-        print("[Python] No data was fetched. CSV file not created.", file=sys.stderr)
-        sys.exit(1) # Exit with an error code
+        print("[Python] No stock data fetched.", file=sys.stderr)
+        sys.exit(1)
